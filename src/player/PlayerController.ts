@@ -23,6 +23,8 @@ export class PlayerController {
   // Mouse / Camera rotation
   private yaw: number = 0; // horizontal rotation in radians
   private pitch: number = 0; // vertical rotation in radians
+  private cameraRoll: number = 0; // z rotation for wallride / slide tilt
+  private targetCameraRoll: number = 0;
   private mouseSensitivity: number = GameConfig.player.defaultSensitivity;
   private isPointerLocked: boolean = false;
 
@@ -33,13 +35,34 @@ export class PlayerController {
     left: false,
     right: false,
     jump: false,
+    slide: false,
   };
 
-  // State
+  // Basic State
   private isGrounded: boolean = false;
   private health: number = GameConfig.player.maxHealth;
   private defaultFov: number = GameConfig.player.defaultFov;
   private targetFov: number = GameConfig.player.defaultFov;
+
+  // Camera Height (Crouch / Slide transition)
+  private currentEyeHeight: number = GameConfig.player.cameraHeight;
+  private targetEyeHeight: number = GameConfig.player.cameraHeight;
+
+  // Bunny Hopping State
+  private jumpBufferTimer: number = 0;
+  private bhopChainCount: number = 0;
+  private groundGraceTimer: number = 0;
+
+  // Slide State (Key C)
+  private isSliding: boolean = false;
+  private slideDurationTimer: number = 0;
+
+  // Wallride & Walljump State
+  private isWallriding: boolean = false;
+  private wallrideTimer: number = 0;
+  private currentWallNormal: Vector3 = Vector3.Zero();
+  private lastWallNormal: Vector3 = Vector3.Zero();
+  private walljumpGraceTimer: number = 0;
 
   // Grapple state (when Enforcer pulls player)
   private grapplePullTarget: Vector3 | null = null;
@@ -90,7 +113,7 @@ export class PlayerController {
       this.updateCameraRotation();
     });
 
-    // Keyboard
+    // Keyboard down
     window.addEventListener('keydown', (e) => {
       const code = e.code;
       if (code === 'KeyW') this.keys.forward = true;
@@ -98,22 +121,27 @@ export class PlayerController {
       if (code === 'KeyA') this.keys.left = true;
       if (code === 'KeyD') this.keys.right = true;
 
+      // Space: Jump, Walljump, Bhop, Slide-Jump
       if (code === 'Space') {
-        if (!this.keys.jump && this.isGrounded) {
-          this.jump();
-        }
-        // Jumping cancels grapple pull
-        if (this.isGrappling) {
-          this.cancelGrapple();
-        }
+        this.handleJumpPress();
         this.keys.jump = true;
       }
 
+      // C: Slide
+      if (code === 'KeyC') {
+        if (!this.keys.slide) {
+          this.handleSlidePress();
+        }
+        this.keys.slide = true;
+      }
+
+      // Shift: Dash
       if (code === 'ShiftLeft' || code === 'ShiftRight') {
         this.performDash();
       }
     });
 
+    // Keyboard up
     window.addEventListener('keyup', (e) => {
       const code = e.code;
       if (code === 'KeyW') this.keys.forward = false;
@@ -121,20 +149,114 @@ export class PlayerController {
       if (code === 'KeyA') this.keys.left = false;
       if (code === 'KeyD') this.keys.right = false;
       if (code === 'Space') this.keys.jump = false;
+      if (code === 'KeyC') {
+        this.keys.slide = false;
+        // Optionally release slide when C is released if player isn't in a combo
+        if (this.isSliding && this.isGrounded) {
+          this.stopSlide();
+        }
+      }
     });
   }
 
   private updateCameraRotation(): void {
-    // Babylon camera rotation: x is pitch, y is yaw
     this.camera.rotation.x = this.pitch;
     this.camera.rotation.y = this.yaw;
-    this.camera.rotation.z = 0;
+    this.camera.rotation.z = this.cameraRoll;
   }
 
-  public jump(): void {
+  private handleJumpPress(): void {
+    // Jumping cancels grapple pull
+    if (this.isGrappling) {
+      this.cancelGrapple();
+    }
+
+    // 1. Walljump check (prioritized if touching or recently touched a wall in mid-air)
+    if (!this.isGrounded && (this.isWallriding || this.walljumpGraceTimer > 0)) {
+      this.performWalljump();
+      return;
+    }
+
+    // 2. Slide-jump check
+    if (this.isSliding && this.isGrounded) {
+      this.performSlideJump();
+      return;
+    }
+
+    // 3. Ground jump / buffer
+    if (this.isGrounded) {
+      this.performJump();
+    } else {
+      // Set jump buffer for bunny hopping on landing
+      this.jumpBufferTimer = GameConfig.bhop.jumpBufferMs / 1000;
+    }
+  }
+
+  public performJump(): void {
     this.velocity.y = GameConfig.player.jumpForce;
     this.isGrounded = false;
     sounds.playJump();
+  }
+
+  public performSlideJump(): void {
+    // Preserves 100% of horizontal slide velocity into airborne state for bunny hopping!
+    this.velocity.y = GameConfig.player.jumpForce;
+    this.isGrounded = false;
+    this.stopSlide();
+    sounds.playJump();
+  }
+
+  public performWalljump(): void {
+    const wallNorm = this.lastWallNormal.lengthSquared() > 0.01 
+      ? this.lastWallNormal 
+      : this.currentWallNormal;
+
+    const outForce = wallNorm.scale(GameConfig.wall.jumpForceOut);
+    const fwdForce = this.getHorizontalForward().scale(GameConfig.wall.jumpForceOut * 0.4);
+
+    this.velocity.x = outForce.x + fwdForce.x;
+    this.velocity.z = outForce.z + fwdForce.z;
+    this.velocity.y = GameConfig.wall.jumpForceUp;
+
+    this.isWallriding = false;
+    this.walljumpGraceTimer = 0;
+    this.targetCameraRoll = 0;
+    this.isGrounded = false;
+
+    sounds.playWalljump();
+  }
+
+  private handleSlidePress(): void {
+    if (this.isSliding) {
+      this.stopSlide();
+    } else {
+      this.startSlide();
+    }
+  }
+
+  public startSlide(): void {
+    this.isSliding = true;
+    this.slideDurationTimer = 0;
+    this.targetEyeHeight = GameConfig.slide.cameraHeight;
+
+    if (this.isGrounded) {
+      const inputDir = this.getInputDirectionWorld();
+      const slideDir = inputDir.lengthSquared() > 0.01 ? inputDir : this.getHorizontalForward();
+      const currentHSpd = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+
+      // Boost speed if below boost threshold, or preserve higher momentum (e.g. from dash or bhop)
+      const targetSlideSpeed = Math.max(currentHSpd, GameConfig.slide.boostSpeed);
+      this.velocity.x = slideDir.x * targetSlideSpeed;
+      this.velocity.z = slideDir.z * targetSlideSpeed;
+
+      sounds.playSlideStart();
+    }
+  }
+
+  public stopSlide(): void {
+    this.isSliding = false;
+    this.slideDurationTimer = 0;
+    this.targetEyeHeight = GameConfig.player.cameraHeight;
   }
 
   public performDash(): boolean {
@@ -143,7 +265,7 @@ export class PlayerController {
 
     const success = this.dashSystem.tryDash(moveDir, camForward, () => {
       this.targetFov = this.defaultFov + GameConfig.dash.fovKick;
-      // Slight upward nudge to make dash smooth across ground seams
+      // If sliding while dashing or dash-sliding, maintain slide stance
       if (this.velocity.y < 0) this.velocity.y = 0;
     });
 
@@ -153,6 +275,8 @@ export class PlayerController {
   public startGrapplePull(target: Vector3): void {
     this.isGrappling = true;
     this.grapplePullTarget = target.clone();
+    this.stopSlide();
+    this.isWallriding = false;
   }
 
   public cancelGrapple(): void {
@@ -165,10 +289,22 @@ export class PlayerController {
   }
 
   public update(dt: number, arenaColliders: Mesh[]): void {
-    // 1. Dash update
-    this.dashSystem.update(dt);
+    // 1. Timers
+    if (this.jumpBufferTimer > 0) {
+      this.jumpBufferTimer -= dt;
+    }
+    if (this.walljumpGraceTimer > 0) {
+      this.walljumpGraceTimer -= dt;
+    }
+    if (this.groundGraceTimer > 0) {
+      this.groundGraceTimer -= dt;
+      if (this.groundGraceTimer <= 0 && this.isGrounded) {
+        this.bhopChainCount = 0;
+      }
+    }
 
-    // FOV recovery
+    // 2. Dash update & FOV recovery
+    this.dashSystem.update(dt);
     if (this.dashSystem.getIsDashing()) {
       this.targetFov = this.defaultFov + GameConfig.dash.fovKick;
     } else {
@@ -176,8 +312,19 @@ export class PlayerController {
     }
     this.camera.fov += (this.targetFov - this.camera.fov) * Math.min(1, dt * 14);
 
-    // 2. Grapple pull physics
+    // 3. Camera Eye Height (Slide transition)
+    this.currentEyeHeight += (this.targetEyeHeight - this.currentEyeHeight) * Math.min(1, dt * 16);
+
+    // 4. Camera Roll (Wallride tilt)
+    this.cameraRoll += (this.targetCameraRoll - this.cameraRoll) * Math.min(1, dt * 10);
+    this.updateCameraRotation();
+
+    // 5. Check Wallride & Wall contact when airborne
+    this.checkWallContact(arenaColliders);
+
+    // 6. Movement physics resolution
     if (this.isGrappling && this.grapplePullTarget) {
+      // Grapple pull physics
       const toTarget = this.grapplePullTarget.subtract(this.position);
       const dist = toTarget.length();
 
@@ -188,16 +335,83 @@ export class PlayerController {
         this.velocity = pullDir.scale(GameConfig.enforcer.hook.pullPlayerSpeed);
       }
     } else if (this.dashSystem.getIsDashing()) {
-      // 3. Dash movement overrides horizontal velocity
+      // Dash overrides horizontal velocity
       const dashVel = this.dashSystem.getDashVelocity();
       this.velocity.x = dashVel.x;
       this.velocity.z = dashVel.z;
-      // Dash resists downward gravity slightly
       this.velocity.y = Math.max(this.velocity.y, -2.0);
-    } else {
-      // 4. Standard FPS WASD movement
+    } else if (this.isSliding && this.isGrounded) {
+      // SLIDE PHYSICS: ultra-low friction, steering, and speed timeout
+      this.slideDurationTimer += dt;
+      const currentHSpd = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+
+      if (currentHSpd < GameConfig.slide.minSpeed || this.slideDurationTimer > (GameConfig.slide.maxDurationMs / 1000)) {
+        this.stopSlide();
+      } else {
+        // Friction deceleration
+        const friction = GameConfig.slide.friction;
+        this.velocity.x += (0 - this.velocity.x) * Math.min(1, friction * dt);
+        this.velocity.z += (0 - this.velocity.z) * Math.min(1, friction * dt);
+
+        // Gentle steering while sliding
+        const inputDir = this.getInputDirectionWorld();
+        if (inputDir.lengthSquared() > 0.01) {
+          const currentDir = new Vector3(this.velocity.x, 0, this.velocity.z).normalize();
+          const steeredDir = Vector3.Lerp(currentDir, inputDir, Math.min(1, dt * 3.5)).normalize();
+          const spd = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+          this.velocity.x = steeredDir.x * spd;
+          this.velocity.z = steeredDir.z * spd;
+        }
+      }
+
+      // Normal gravity on ground/slopes
+      this.velocity.y -= GameConfig.player.gravity * dt;
+    } else if (this.isWallriding) {
+      // WALLRIDE PHYSICS: reduced downward gravity, maintain wall tangent momentum
+      this.wallrideTimer += dt;
+      if (this.wallrideTimer > (GameConfig.wall.maxRideDurationMs / 1000)) {
+        this.isWallriding = false;
+        this.targetCameraRoll = 0;
+      } else {
+        // Reduced falling speed (glide)
+        if (this.velocity.y < -GameConfig.wall.rideGravity) {
+          this.velocity.y += ((-GameConfig.wall.rideGravity) - this.velocity.y) * Math.min(1, dt * 10);
+        } else {
+          this.velocity.y -= GameConfig.wall.rideGravity * dt;
+        }
+      }
+    } else if (!this.isGrounded) {
+      // AIRBORNE & BUNNY HOPPING PHYSICS:
+      // ZERO air friction so accumulated momentum is 100% preserved!
       const inputDir = this.getInputDirectionWorld();
-      const accel = this.isGrounded ? GameConfig.player.acceleration : GameConfig.player.acceleration * GameConfig.player.airControl;
+      const currentHSpd = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+      const targetSpeed = GameConfig.player.walkSpeed;
+
+      if (inputDir.lengthSquared() > 0.001) {
+        if (currentHSpd > targetSpeed) {
+          // High-speed air strafe steering:
+          // Smoothly redirect momentum vector towards inputDir without clamping speed!
+          const currentDir = new Vector3(this.velocity.x, 0, this.velocity.z).normalize();
+          const blendedDir = Vector3.Lerp(currentDir, inputDir, Math.min(1, dt * 4.5)).normalize();
+          this.velocity.x = blendedDir.x * currentHSpd;
+          this.velocity.z = blendedDir.z * currentHSpd;
+        } else {
+          // Standard air acceleration
+          const accel = GameConfig.player.acceleration * GameConfig.player.airControl;
+          const desiredVelX = inputDir.x * targetSpeed;
+          const desiredVelZ = inputDir.z * targetSpeed;
+          this.velocity.x += (desiredVelX - this.velocity.x) * Math.min(1, accel * dt / targetSpeed);
+          this.velocity.z += (desiredVelZ - this.velocity.z) * Math.min(1, accel * dt / targetSpeed);
+        }
+      }
+
+      // Normal gravity
+      this.velocity.y -= GameConfig.player.gravity * dt;
+      if (this.velocity.y < -40) this.velocity.y = -40;
+    } else {
+      // STANDARD GROUND MOVEMENT
+      const inputDir = this.getInputDirectionWorld();
+      const accel = GameConfig.player.acceleration;
       const targetSpeed = GameConfig.player.walkSpeed;
 
       if (inputDir.lengthSquared() > 0.001) {
@@ -207,27 +421,94 @@ export class PlayerController {
         this.velocity.x += (desiredVelX - this.velocity.x) * Math.min(1, accel * dt / targetSpeed);
         this.velocity.z += (desiredVelZ - this.velocity.z) * Math.min(1, accel * dt / targetSpeed);
       } else {
-        // Friction
-        const friction = this.isGrounded ? GameConfig.player.friction : GameConfig.player.friction * 0.2;
+        // Normal ground friction
+        const friction = GameConfig.player.friction;
         this.velocity.x += (0 - this.velocity.x) * Math.min(1, friction * dt);
         this.velocity.z += (0 - this.velocity.z) * Math.min(1, friction * dt);
       }
 
-      // Gravity
       this.velocity.y -= GameConfig.player.gravity * dt;
-      if (this.velocity.y < -40) this.velocity.y = -40; // clamp terminal velocity
     }
 
-    // 5. Kinematic movement step & collision resolution
+    // 7. Kinematic move & collision resolution
     this.resolveKinematicMove(dt, arenaColliders);
 
-    // 6. Sync camera position
+    // 8. Sync camera position
     this.camera.position.copyFrom(this.position);
+  }
+
+  private checkWallContact(colliders: Mesh[]): void {
+    if (this.isGrounded || this.isGrappling || this.dashSystem.getIsDashing()) {
+      if (this.isWallriding) {
+        this.isWallriding = false;
+        this.targetCameraRoll = 0;
+      }
+      return;
+    }
+
+    // Raycast in 6 horizontal directions around the player's torso
+    const chestY = this.position.y - this.currentEyeHeight + 0.9;
+    const origin = new Vector3(this.position.x, chestY, this.position.z);
+    const maxDist = GameConfig.wall.detectionDistance;
+
+    const camFwd = this.getHorizontalForward();
+    const camRight = this.getHorizontalRight();
+
+    const probeDirs = [
+      camRight,
+      camRight.scale(-1),
+      camFwd,
+      camRight.add(camFwd).normalize(),
+      camRight.scale(-1).add(camFwd).normalize(),
+    ];
+
+    let foundWall = false;
+
+    for (const dir of probeDirs) {
+      const ray = new Ray(origin, dir, maxDist);
+      const hit = this.scene.pickWithRay(ray, (m) => {
+        return colliders.includes(m as Mesh) && (!!m.metadata?.isWall || !!m.metadata?.isObstacle || !!m.metadata?.isRicochet);
+      });
+
+      if (hit && hit.hit && hit.pickedPoint) {
+        const normal = hit.getNormal(true);
+        if (normal && Math.abs(normal.y) < 0.35) {
+          // Valid vertical wall found!
+          foundWall = true;
+          this.currentWallNormal.copyFrom(normal);
+          this.lastWallNormal.copyFrom(normal);
+          this.walljumpGraceTimer = 0.25; // 250ms grace window for walljump
+
+          if (!this.isWallriding) {
+            this.isWallriding = true;
+            this.wallrideTimer = 0;
+            sounds.playWallrideStart();
+          }
+
+          // Camera roll tilt based on which side the wall is
+          const crossY = Vector3.Cross(camFwd, normal).y;
+          this.targetCameraRoll = crossY > 0 ? -GameConfig.wall.cameraTilt : GameConfig.wall.cameraTilt;
+
+          // Push slightly away from wall penetration to glide smoothly
+          const dot = this.velocity.x * normal.x + this.velocity.z * normal.z;
+          if (dot < 0) {
+            this.velocity.x -= dot * normal.x;
+            this.velocity.z -= dot * normal.z;
+          }
+          break;
+        }
+      }
+    }
+
+    if (!foundWall && this.isWallriding) {
+      this.isWallriding = false;
+      this.targetCameraRoll = 0;
+    }
   }
 
   private resolveKinematicMove(dt: number, colliders: Mesh[]): void {
     const radius = GameConfig.player.radius;
-    const height = GameConfig.player.height;
+    const height = this.isSliding ? 1.0 : GameConfig.player.height;
     const { width, depth, height: arenaHeight } = GameConfig.arena;
     const halfW = width / 2 - radius - 0.2;
     const halfD = depth / 2 - radius - 0.2;
@@ -236,16 +517,51 @@ export class PlayerController {
     const nextPos = this.position.add(this.velocity.scale(dt));
 
     // Ground check via downward raycast
-    const feetPos = new Vector3(this.position.x, this.position.y - GameConfig.player.cameraHeight + 0.2, this.position.z);
+    const feetPos = new Vector3(this.position.x, this.position.y - this.currentEyeHeight + 0.2, this.position.z);
     const downRay = new Ray(feetPos, new Vector3(0, -1, 0), 0.45);
     const hit = this.scene.pickWithRay(downRay, (m) => colliders.includes(m as Mesh));
 
     if (hit && hit.hit && hit.pickedPoint && this.velocity.y <= 0) {
       const groundY = hit.pickedPoint.y;
-      if (nextPos.y - GameConfig.player.cameraHeight <= groundY + 0.15) {
-        nextPos.y = groundY + GameConfig.player.cameraHeight;
+      if (nextPos.y - this.currentEyeHeight <= groundY + 0.15) {
+        nextPos.y = groundY + this.currentEyeHeight;
         this.velocity.y = 0;
-        this.isGrounded = true;
+
+        // Transition from air to ground
+        if (!this.isGrounded) {
+          // BUNNY HOPPING CHECK: Did player buffer a jump or is holding Space?
+          if (this.jumpBufferTimer > 0 || this.keys.jump) {
+            // Consecutive Bunny Hop executed!
+            this.jumpBufferTimer = 0;
+            this.bhopChainCount++;
+            
+            // Add slight speed boost on successful bhop
+            const currentHSpd = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+            const newHSpd = Math.min(GameConfig.bhop.maxBhopSpeed, currentHSpd + GameConfig.bhop.speedBoostPerHop);
+            if (currentHSpd > 0.1) {
+              const hDir = new Vector3(this.velocity.x, 0, this.velocity.z).normalize();
+              this.velocity.x = hDir.x * newHSpd;
+              this.velocity.z = hDir.z * newHSpd;
+            }
+
+            this.velocity.y = GameConfig.player.jumpForce;
+            this.isGrounded = false;
+            sounds.playBhop(this.bhopChainCount);
+          } else {
+            // Landed without bhop
+            this.isGrounded = true;
+            this.groundGraceTimer = 0.1; // short window before combo drops
+            this.isWallriding = false;
+            this.targetCameraRoll = 0;
+
+            // If player was holding C while airborne, immediately enter slide upon landing!
+            if (this.keys.slide && !this.isSliding) {
+              this.startSlide();
+            }
+          }
+        } else {
+          this.isGrounded = true;
+        }
       }
     } else {
       this.isGrounded = false;
@@ -258,11 +574,11 @@ export class PlayerController {
       if (this.velocity.y > 0) this.velocity.y = 0;
     }
 
-    // Arena boundary clamp (never clip outside walls)
+    // Arena boundary clamp
     nextPos.x = Math.max(-halfW, Math.min(halfW, nextPos.x));
     nextPos.z = Math.max(-halfD, Math.min(halfD, nextPos.z));
 
-    // Obstacle horizontal resolution (simple bounding box pushing for pillars)
+    // Obstacle horizontal resolution (pillars)
     for (const collider of colliders) {
       if (collider.metadata?.isObstacle) {
         const bounds = collider.getBoundingInfo().boundingBox;
@@ -273,7 +589,7 @@ export class PlayerController {
         const minY = bounds.minimumWorld.y;
         const maxY = bounds.maximumWorld.y;
 
-        const playerFeet = nextPos.y - GameConfig.player.cameraHeight;
+        const playerFeet = nextPos.y - this.currentEyeHeight;
         const playerHead = playerFeet + height;
 
         if (
@@ -284,7 +600,6 @@ export class PlayerController {
           playerHead >= minY &&
           playerFeet <= maxY
         ) {
-          // Push out in the direction of least penetration
           const pushLeft = nextPos.x - minX;
           const pushRight = maxX - nextPos.x;
           const pushDown = nextPos.z - minZ;
@@ -331,7 +646,6 @@ export class PlayerController {
   }
 
   public getCameraForward(): Vector3 {
-    // 3D forward vector accounting for pitch and yaw
     return new Vector3(
       Math.sin(this.yaw) * Math.cos(this.pitch),
       -Math.sin(this.pitch),
@@ -347,6 +661,9 @@ export class PlayerController {
     this.position.copyFrom(pos);
     this.velocity = Vector3.Zero();
     this.camera.position.copyFrom(pos);
+    this.stopSlide();
+    this.isWallriding = false;
+    this.targetCameraRoll = 0;
   }
 
   public getHealth(): number {
@@ -363,6 +680,22 @@ export class PlayerController {
 
   public getIsGrounded(): boolean {
     return this.isGrounded;
+  }
+
+  public getIsSliding(): boolean {
+    return this.isSliding;
+  }
+
+  public getIsWallriding(): boolean {
+    return this.isWallriding;
+  }
+
+  public getBhopChain(): number {
+    return this.bhopChainCount;
+  }
+
+  public getHorizontalSpeed(): number {
+    return Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
   }
 
   public getIsPointerLocked(): boolean {

@@ -16,6 +16,32 @@ export const GameConfig = {
     defaultFov: 1.35, // ~77 degrees in radians
   },
 
+  bhop: {
+    airFriction: 0.0, // Momentum fully preserved in the air
+    airAcceleration: 45.0,
+    jumpBufferMs: 160,
+    speedBoostPerHop: 1.0,
+    maxBhopSpeed: 44.0,
+  },
+
+  slide: {
+    cameraHeight: 0.85,
+    normalCameraHeight: 1.65,
+    boostSpeed: 24.0,
+    friction: 2.2,
+    minSpeed: 4.0,
+    maxDurationMs: 1800,
+  },
+
+  wall: {
+    detectionDistance: 1.1,
+    rideGravity: 5.0,
+    maxRideDurationMs: 2500,
+    jumpForceUp: 12.0,
+    jumpForceOut: 14.0,
+    cameraTilt: 0.09, // ~5.2 degrees roll
+  },
+
   dash: {
     speed: 32.0,
     durationMs: 150,

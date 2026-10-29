@@ -357,6 +357,101 @@ export class SoundSystem {
     osc.stop(t + 0.04);
   }
 
+  public playSlideStart(): void {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(140, t);
+    osc.frequency.linearRampToValueAtTime(70, t + 0.22);
+
+    gain.gain.setValueAtTime(0.3, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.25);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start(t);
+    osc.stop(t + 0.25);
+
+    this.playNoiseBurst(0.25, 900, 0.4);
+  }
+
+  public playWallrideStart(): void {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.linearRampToValueAtTime(180, t + 0.15);
+
+    gain.gain.setValueAtTime(0.18, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.18);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start(t);
+    osc.stop(t + 0.18);
+
+    this.playNoiseBurst(0.15, 1400, 0.2);
+  }
+
+  public playWalljump(): void {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(420, t + 0.14);
+
+    gain.gain.setValueAtTime(0.35, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.16);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start(t);
+    osc.stop(t + 0.16);
+
+    this.playNoiseBurst(0.08, 2200, 0.35);
+  }
+
+  public playBhop(hopCount: number = 1): void {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    const baseFreq = Math.min(600, 260 + hopCount * 30);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(baseFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 1.5, t + 0.08);
+
+    gain.gain.setValueAtTime(0.25, t);
+    gain.gain.exponentialRampToValueAtTime(0.01, t + 0.09);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start(t);
+    osc.stop(t + 0.09);
+  }
+
   public playTrainingProjectileLaunch(): void {
     this.initContext();
     if (!this.ctx || !this.masterGain || this.isMuted) return;

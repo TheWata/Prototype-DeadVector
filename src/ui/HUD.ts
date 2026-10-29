@@ -20,6 +20,9 @@ export class HUD {
   private parryStatusEl!: HTMLElement;
   private secondaryCooldownEl!: HTMLElement;
   private secondaryNameEl!: HTMLElement;
+  private slideStatusEl!: HTMLElement;
+  private speedMeterEl!: HTMLElement;
+  private movementStateBadgeEl!: HTMLElement;
   private classNameEl!: HTMLElement;
   private classHintEl!: HTMLElement;
   private floatingContainerEl!: HTMLElement;
@@ -61,6 +64,12 @@ export class HUD {
         </div>
       </div>
 
+      <!-- Center Movement & Speed HUD -->
+      <div class="movement-hud">
+        <div id="speed-meter" class="speed-meter">14.0 m/s</div>
+        <div id="movement-state-badge" class="movement-state-badge">NORMAL</div>
+      </div>
+
       <!-- Top Center: Target Dummy Boss/Inspection Bar -->
       <div id="dummy-hud" class="dummy-hud">
         <div class="dummy-header">
@@ -94,9 +103,11 @@ export class HUD {
 
       <!-- Top Right: Quick Controls / Helper -->
       <div class="controls-guide">
-        <div class="guide-row"><kbd>ESC</kbd> <span>Pausar / Trocar Classe</span></div>
-        <div class="guide-row"><kbd>F</kbd> <span>Parry Defensivo</span></div>
+        <div class="guide-row"><kbd>ESC</kbd> <span>Pausar / Menu</span></div>
+        <div class="guide-row"><kbd>C</kbd> <span>Slide (Deslizar)</span></div>
+        <div class="guide-row"><kbd>Espaço</kbd> <span>Pulo / Walljump / Bhop</span></div>
         <div class="guide-row"><kbd>Shift</kbd> <span>Dash Rápido</span></div>
+        <div class="guide-row"><kbd>F</kbd> <span>Parry Defensivo</span></div>
         <div class="guide-row"><kbd>G</kbd> <span>Projétil de Treino</span></div>
         <div class="guide-row"><kbd>K</kbd> <span>Alternar Peso Dummy</span></div>
       </div>
@@ -121,6 +132,13 @@ export class HUD {
             <div class="slot-icon">DASH</div>
             <div class="slot-cooldown-overlay" id="dash-cooldown-overlay"></div>
             <div class="slot-status" id="dash-status">PRONTO</div>
+          </div>
+
+          <!-- Movement Slide -->
+          <div class="action-slot slide-slot">
+            <div class="slot-key">C</div>
+            <div class="slot-icon">SLIDE</div>
+            <div class="slot-status" id="slide-status">PRONTO</div>
           </div>
 
           <!-- Global Parry F -->
@@ -170,6 +188,9 @@ export class HUD {
     this.parryStatusEl = this.container.querySelector('#parry-status')!;
     this.secondaryCooldownEl = this.container.querySelector('#secondary-cooldown-overlay')!;
     this.secondaryNameEl = this.container.querySelector('#secondary-slot-name')!;
+    this.slideStatusEl = this.container.querySelector('#slide-status')!;
+    this.speedMeterEl = this.container.querySelector('#speed-meter')!;
+    this.movementStateBadgeEl = this.container.querySelector('#movement-state-badge')!;
     this.classNameEl = this.container.querySelector('#hud-class-name')!;
     this.classHintEl = this.container.querySelector('#hud-class-hint')!;
     this.floatingContainerEl = this.container.querySelector('#floating-container')!;
@@ -263,6 +284,37 @@ export class HUD {
     } else {
       this.dashStatusEl.textContent = 'RECARGA';
       this.dashStatusEl.className = 'slot-status';
+    }
+
+    // 2b. Movement Speedometer & State Badge
+    const speed = player.getHorizontalSpeed();
+    this.speedMeterEl.textContent = `${speed.toFixed(1)} m/s`;
+
+    if (player.getIsSliding()) {
+      this.slideStatusEl.textContent = 'SLIDE!';
+      this.slideStatusEl.className = 'slot-status active';
+      this.movementStateBadgeEl.textContent = 'SLIDE';
+      this.movementStateBadgeEl.className = 'movement-state-badge slide';
+    } else {
+      this.slideStatusEl.textContent = 'PRONTO';
+      this.slideStatusEl.className = 'slot-status ready';
+
+      if (player.getIsWallriding()) {
+        this.movementStateBadgeEl.textContent = 'WALLRIDE';
+        this.movementStateBadgeEl.className = 'movement-state-badge wallride';
+      } else if (player.getBhopChain() > 0) {
+        this.movementStateBadgeEl.textContent = `BHOP x${player.getBhopChain()}`;
+        this.movementStateBadgeEl.className = 'movement-state-badge bhop';
+      } else if (player.dashSystem.getIsDashing()) {
+        this.movementStateBadgeEl.textContent = 'DASH';
+        this.movementStateBadgeEl.className = 'movement-state-badge dash';
+      } else if (!player.getIsGrounded()) {
+        this.movementStateBadgeEl.textContent = 'NO AR';
+        this.movementStateBadgeEl.className = 'movement-state-badge air';
+      } else {
+        this.movementStateBadgeEl.textContent = speed > 1.0 ? 'CORRENDO' : 'PARADO';
+        this.movementStateBadgeEl.className = 'movement-state-badge';
+      }
     }
 
     // 3. Parry Cooldown & Window

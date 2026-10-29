@@ -32,7 +32,8 @@ Servidor padrão acessível em: `http://localhost:5173/`
 |---|---|
 | **W, A, S, D** | Movimentação horizontal rápida |
 | **Mouse** | Câmera FPS em primeira pessoa (Pointer Lock) |
-| **Espaço** | Pulo com controle aéreo |
+| **Espaço** | Pulo / Walljump / Bunny Hopping |
+| **C** | Slide (Deslizar em alta velocidade com perfil baixo) |
 | **Shift** | Dash direcional (com FOV kick e cooldown) |
 | **F** | Parry defensivo (intercepta e reflete projéteis para a mira) |
 | **Mouse 1** | Ataque Primário da classe |
@@ -43,6 +44,15 @@ Servidor padrão acessível em: `http://localhost:5173/`
 | **T** | Restaura posição inicial do Alvo |
 | **Esc** | Pausa o jogo, libera o cursor do mouse e abre menu |
 | **Q, E, X** | *Placeholders visuais na HUD* |
+
+---
+
+## 🏃‍♀️ Sistema de Movimentação Avançada
+
+- **Bunny Hopping (Bhop)**: A inércia e velocidade horizontal são 100% mantidas no ar (atrito aéreo zero). Pular ao encostar no solo (ou segurar/bufferizar a tecla Espaço) preserva o momento e concede bônus progressivo de velocidade por salto encadeado, com indicador `BHOP xN` e velocímetro no HUD.
+- **Slide (`C`)**: Deslize rápido com câmera e colisão rebaixadas. Se executado após um dash ou em velocidade, preserva todo o momento com atrito reduzido. Pressionar Espaço durante o slide realiza um **Slide-Jump**, catapultando a velocidade para o ar.
+- **Wallride**: Ao tocar paredes verticais no ar, o jogador desliza pela parede com gravidade reduzida e inclinação tátil de câmera (*roll tilt*).
+- **Walljump**: Pressionar Espaço durante o wallride chuta o jogador para longe da parede com impulso explosivo vertical e diagonal.
 
 ---
 
